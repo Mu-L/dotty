@@ -182,18 +182,19 @@ trait TypesSupport:
           ++ plain(" ").l
           ++ inner(typeList.last)
         else if t.isFunctionType then
+          val arrow = if t.isContextFunctionType then " ?=> " else " => "
           typeList match
             case Nil =>
               Nil
             case Seq(rtpe) =>
-              plain("()").l ++ keyword(" => ").l ++ inner(rtpe)
+              plain("()").l ++ keyword(arrow).l ++ inner(rtpe)
             case Seq(arg, rtpe) =>
               val partOfSignature = arg match
                 case byName: ByNameType => plain("(").l ++ inner(byName) ++ plain(")").l
                 case _ => inner(arg)
-              partOfSignature ++ keyword(" => ").l ++ inner(rtpe)
+              partOfSignature ++ keyword(arrow).l ++ inner(rtpe)
             case args =>
-              plain("(").l ++ commas(args.init.map(inner)) ++ plain(")").l ++ keyword(" => ").l ++ inner(args.last)
+              plain("(").l ++ commas(args.init.map(inner)) ++ plain(")").l ++ keyword(arrow).l ++ inner(args.last)
         else if t.isTupleN then
           typeList match
             case Nil =>
@@ -305,7 +306,8 @@ trait TypesSupport:
   private def typeBoundsTreeOfHigherKindedType(using Quotes)(low: reflect.TypeRepr, high: reflect.TypeRepr) =
     import reflect._
     def regularTypeBounds(low: TypeRepr, high: TypeRepr) =
-      typeBound(low, low = true) ++ typeBound(high, low = false)
+      if low == high then keyword(" = ").l ++ inner(low)
+      else typeBound(low, low = true) ++ typeBound(high, low = false)
     high.match
       case TypeLambda(params, paramBounds, resType) =>
         if resType.typeSymbol == defn.AnyClass then

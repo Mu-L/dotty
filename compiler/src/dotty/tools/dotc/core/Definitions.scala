@@ -49,7 +49,10 @@ class Definitions {
   private def newPermanentClassSymbol(owner: Symbol, name: TypeName, flags: FlagSet, infoFn: ClassSymbol => Type) =
     newClassSymbol(owner, name, flags | Permanent | NoInits | Open, infoFn)
 
-  private def enterCompleteClassSymbol(owner: Symbol, name: TypeName, flags: FlagSet, parents: List[TypeRef], decls: Scope = newScope) =
+  private def enterCompleteClassSymbol(owner: Symbol, name: TypeName, flags: FlagSet, parents: List[TypeRef]): ClassSymbol =
+    enterCompleteClassSymbol(owner, name, flags, parents, newScope(owner.nestingLevel + 1))
+
+  private def enterCompleteClassSymbol(owner: Symbol, name: TypeName, flags: FlagSet, parents: List[TypeRef], decls: Scope) =
     newCompleteClassSymbol(owner, name, flags | Permanent | NoInits | Open, parents, decls).entered
 
   private def enterTypeField(cls: ClassSymbol, name: TypeName, flags: FlagSet, scope: MutableScope) =
@@ -433,7 +436,7 @@ class Definitions {
     Any_toString, Any_##, Any_getClass, Any_isInstanceOf, Any_typeTest, Object_eq, Object_ne)
 
   @tu lazy val AnyKindClass: ClassSymbol = {
-    val cls = newCompleteClassSymbol(ScalaPackageClass, tpnme.AnyKind, AbstractFinal | Permanent, Nil)
+    val cls = newCompleteClassSymbol(ScalaPackageClass, tpnme.AnyKind, AbstractFinal | Permanent, Nil, newScope(0))
     if (!ctx.settings.YnoKindPolymorphism.value)
       // Enable kind-polymorphism by exposing scala.AnyKind
       cls.entered
@@ -443,12 +446,6 @@ class Definitions {
 
   @tu lazy val andType: TypeSymbol = enterBinaryAlias(tpnme.AND, AndType(_, _))
   @tu lazy val orType: TypeSymbol = enterBinaryAlias(tpnme.OR, OrType(_, _, soft = false))
-
-  /** Marker method to indicate an argument to a call-by-name parameter.
-   *  Created by byNameClosures and elimByName, eliminated by Erasure,
-   */
-  @tu lazy val cbnArg: TermSymbol = enterPolyMethod(OpsPackageClass, nme.cbnArg, 1,
-      pt => MethodType(List(FunctionOf(Nil, pt.paramRefs(0))), pt.paramRefs(0)))
 
   /** Method representing a throw */
   @tu lazy val throwMethod: TermSymbol = enterMethod(OpsPackageClass, nme.THROWkw,
@@ -945,6 +942,7 @@ class Definitions {
   @tu lazy val FunctionalInterfaceAnnot: ClassSymbol = requiredClass("java.lang.FunctionalInterface")
   @tu lazy val TargetNameAnnot: ClassSymbol = requiredClass("scala.annotation.targetName")
   @tu lazy val VarargsAnnot: ClassSymbol = requiredClass("scala.annotation.varargs")
+  @tu lazy val SinceAnnot: ClassSymbol = requiredClass("scala.annotation.since")
 
   @tu lazy val JavaRepeatableAnnot: ClassSymbol = requiredClass("java.lang.annotation.Repeatable")
 
@@ -1077,6 +1075,24 @@ class Definitions {
         None
     }
   }
+
+  object ByNameFunction:
+    def apply(tp: Type)(using Context): Type =
+      defn.ContextFunction0.typeRef.appliedTo(tp :: Nil)
+    def unapply(tp: Type)(using Context): Option[Type] = tp match
+      case tp @ AppliedType(tycon, arg :: Nil) if defn.isByNameFunctionClass(tycon.typeSymbol) =>
+        Some(arg)
+      case tp @ AnnotatedType(parent, _) =>
+        unapply(parent)
+      case _ =>
+        None
+
+  final def isByNameFunctionClass(sym: Symbol): Boolean =
+    sym eq ContextFunction0
+
+  def isByNameFunction(tp: Type)(using Context): Boolean = tp match
+    case ByNameFunction(_) => true
+    case _ => false
 
   final def isCompiletime_S(sym: Symbol)(using Context): Boolean =
     sym.name == tpnme.S && sym.owner == CompiletimeOpsIntModuleClass
@@ -1291,10 +1307,12 @@ class Definitions {
     ).symbol.asClass
 
   @tu lazy val Function0_apply: Symbol = Function0.requiredMethod(nme.apply)
+  @tu lazy val ContextFunction0_apply: Symbol = ContextFunction0.requiredMethod(nme.apply)
 
   @tu lazy val Function0: Symbol = FunctionClass(0)
   @tu lazy val Function1: Symbol = FunctionClass(1)
   @tu lazy val Function2: Symbol = FunctionClass(2)
+  @tu lazy val ContextFunction0: Symbol = FunctionClass(0, isContextual = true)
 
   def FunctionType(n: Int, isContextual: Boolean = false, isErased: Boolean = false)(using Context): TypeRef =
     FunctionClass(n, isContextual && !ctx.erasedTypes, isErased).typeRef
@@ -1541,7 +1559,8 @@ class Definitions {
     new PerRun(Function2SpecializedReturnTypes.map(_.symbol))
 
   def isSpecializableFunction(cls: ClassSymbol, paramTypes: List[Type], retType: Type)(using Context): Boolean =
-    paramTypes.length <= 2 && cls.derivesFrom(FunctionClass(paramTypes.length))
+    paramTypes.length <= 2
+    && (cls.derivesFrom(FunctionClass(paramTypes.length)) || isByNameFunctionClass(cls))
     && isSpecializableFunctionSAM(paramTypes, retType)
 
   /** If the Single Abstract Method of a Function class has this type, is it specializable? */
